@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="utf-8">
+<link rel="stylesheet" href="styles.css">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0B2E7B">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NCCOG Library</title>
+</head>
+<body>
+<header>
+  <img class="logo" alt="New Creation Church of God" src="icons/logo.png">
+  <div>
+    <h1>New Creation Church of God<br>Notebook Library</h1>
+    <p>Growing in Christ. Serving the community.</p>
+  </div>
+</header>
+<nav id="tabs" class="hidden">
+  <button data-tab="add" class="on">➕ Add</button>
+  <button data-tab="library">📚 Library</button>
+  <button data-tab="help">❓ Help</button>
+</nav>
+
+<main>
+  <!-- Access code -->
+  <section id="gate" class="card hidden">
+    <h2>Welcome!</h2>
+    <p>Type the access code from Matt's email. You only need to do this once on each phone or computer.</p>
+    <label for="codeIn">Access code</label>
+    <input id="codeIn" type="text" autocomplete="off" autocapitalize="none" placeholder="the code from Matt's email">
+    <p></p>
+    <button class="btn wide" id="codeBtn">Continue</button>
+    <div id="gateMsg"></div>
+  </section>
+
+  <!-- Add -->
+  <section id="tab-add" class="hidden">
+    <div class="card">
+      <h2>1. What are you adding?</h2>
+      <div class="choices" id="typeChoices">
+        <button class="choice on" data-v="Sermon"><b>🎤 Sermon</b><span>video, audio or notes</span></button>
+        <button class="choice" data-v="Book"><b>📖 Book</b><span>PDF, EPUB or text file</span></button>
+        <button class="choice" data-v="Article"><b>📝 Article / notes</b><span>anything else</span></button>
+      </div>
+
+      <h2 style="margin-top:20px">2. Where is it?</h2>
+      <div class="choices" id="srcChoices">
+        <button class="choice on" data-v="youtube"><b>▶️ YouTube link</b><span>paste the link</span></button>
+        <button class="choice" data-v="audio"><b>🎧 Audio file</b><span>MP3, M4A, WAV</span></button>
+        <button class="choice" data-v="file"><b>📄 Document file</b><span>PDF, EPUB, TXT</span></button>
+        <button class="choice" data-v="paste"><b>📋 Paste text</b><span>type or paste</span></button>
+      </div>
+
+      <div id="src-youtube">
+        <label for="ytUrl">YouTube link <span class="hint">(in the YouTube app: Share → Copy link)</span></label>
+        <input id="ytUrl" type="url" placeholder="https://youtube.com/watch?v=...">
+        <label for="ytMin">About how long is it? <span class="hint">(minutes, a guess is fine)</span></label>
+        <input id="ytMin" type="number" min="5" max="240" value="60">
+      </div>
+      <div id="src-audio" class="hidden">
+        <label for="audioIn">Choose the audio file <span class="hint">(up to 30 MB, about 45 minutes; for longer, use a YouTube link)</span></label>
+        <input id="audioIn" type="file" accept="audio/*">
+      </div>
+      <div id="src-file" class="hidden">
+        <label for="fileIn">Choose the file <span class="hint">(PDF, EPUB or TXT; copy-protected Kindle books won't work)</span></label>
+        <input id="fileIn" type="file" accept=".pdf,.epub,.txt,application/pdf,application/epub+zip,text/plain">
+        <div id="fileInfo" class="hint"></div>
+      </div>
+      <div id="src-paste" class="hidden">
+        <label for="pasteIn">Paste or type the text</label>
+        <textarea id="pasteIn" placeholder="Paste sermon notes, an article, a transcript..."></textarea>
+      </div>
+
+      <h2 style="margin-top:20px">3. Details</h2>
+      <label for="titleIn">Title</label>
+      <input id="titleIn" type="text" placeholder="e.g. Grace That Holds — Romans 8">
+      <div class="row">
+        <div><label for="authorIn" id="authorLbl">Speaker</label><input id="authorIn" type="text" placeholder="e.g. Pastor Smith"></div>
+        <div><label for="dateIn">Date <span class="hint">(optional)</span></label><input id="dateIn" type="date"></div>
+      </div>
+      <label for="nbIn">Which notebook? <span class="hint">(Automatic reads it and picks the best fit)</span></label>
+      <select id="nbIn"><option value="auto">✨ Automatic (recommended)</option></select>
+      <label for="byIn">Your name <span class="hint">(remembered on this device)</span></label>
+      <input id="byIn" type="text" placeholder="Your first name">
+      <p></p>
+      <button class="btn gold wide" id="addBtn">Add to the library</button>
+      <div id="addMsg"></div>
+    </div>
+  </section>
+
+  <!-- Library -->
+  <section id="tab-library" class="hidden">
+    <div class="card">
+      <h2>Notebooks</h2>
+      <p class="hint">Tap a notebook to open it in Gemini Notebook, then ask questions or make study guides.</p>
+      <div id="nbList">Loading…</div>
+    </div>
+    <div class="card">
+      <h2>Everything that's been added</h2>
+      <input id="searchIn" type="text" placeholder="🔍 Search titles, speakers, topics… e.g. forgiveness">
+      <div id="itemList" style="margin-top:8px">Loading…</div>
+    </div>
+  </section>
+
+  <!-- Help -->
+  <section id="tab-help" class="hidden">
+    <div class="card">
+      <h2>How this works</h2>
+      <ol class="steps">
+        <li><b>Add</b> a sermon or book on the ➕ Add tab.</li>
+        <li>The app reads it, picks the right notebook, and saves it on that notebook's next empty "shelf".</li>
+        <li><b>Wait about 5 minutes.</b> The notebook picks up new shelves by itself.</li>
+        <li>Open the notebook from the 📚 Library tab and ask questions, or use <b>Studio → Reports</b> to make study guides and curricula.</li>
+      </ol>
+      <h3>Tips</h3>
+      <ul>
+        <li>YouTube videos must be <b>public</b> (or unlisted) for transcription to work.</li>
+        <li>If the app isn't sure which notebook fits, it will ask you to pick.</li>
+        <li>Anything made by the notebook is a first draft. Check quotes before teaching.</li>
+      </ul>
+      <h3>Something wrong?</h3>
+      <p>Every error message says what happened and whether anything was saved. If you're stuck, email
+        <a href="mailto:mstaton53@gmail.com?subject=Notebook%20Library%20app%20problem">Matt at mstaton53@gmail.com</a>
+        with what you tapped and what you saw (a screenshot helps).</p>
+      <h3>Put it on your phone's home screen</h3>
+      <p><b>iPhone:</b> in Safari tap Share → <b>Add to Home Screen</b>. <b>Android:</b> in Chrome tap ⋮ → <b>Add to Home screen</b>.</p>
+    </div>
+  </section>
+
+  <!-- Admin (owner only) -->
+</main>
+<footer>Questions? <a href="mailto:mstaton53@gmail.com">Email Matt</a> · New Creation Church of God</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
