@@ -2,8 +2,10 @@
 (function () {
   'use strict';
   var code = '', started = false, active = blankStudy(), studies = [], workspace = { free: 0, total: 0 };
-  var syncState = 'saved', syncError = '', listError = '', saveTimer = null, savePromise = null, toastTimer = null, pollTimer = null, pollToken = 0, localSafe = true;
+  var syncState = 'saved', syncError = '', listError = '', saveTimer = null, savePromise = null, toastTimer = null, pollTimer = null, listPollTimer = null, pollToken = 0, localSafe = true;
   var epoch = 0, listRequest = 0, currentRoute = '#/studies', search = '';
+  var buildPending = false, archivePending = {};
+  var waitMessage = 'Allow about 10–15 minutes. Gemini can take a few extra minutes to show the new books after the app says Ready.';
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function blankStudy() { return { id: '', name: '', by: '', items: [], status: 'draft', updatedAt: '', pinned: false, _dirty: false }; }
@@ -33,12 +35,18 @@
   }
   function displayName() { return active.name.trim() || defaultName(); }
   function statusOf(s) {
+    if (archivePending[s.id]) return 'Archiving…';
+    if (s === active && buildPending) return 'Building';
     if (s.status === 'queued' || s.status === 'building') return 'Building';
+    if (s.status === 'archiving') return 'Archiving…';
+    if (s.status === 'archive_failed') return 'Archive paused';
     if (s.status === 'failed') return 'Failed';
     if (s.displayStatus) {
       var shown = String(s.displayStatus).toLowerCase().replace(/[_-]+/g, ' ');
       if (shown === 'needs update') return 'Needs update';
       if (shown === 'building' || shown === 'queued') return 'Building';
+      if (shown === 'archiving') return 'Archiving…';
+      if (shown === 'archive failed') return 'Archive paused';
       if (shown === 'ready') return 'Ready';
       if (shown === 'failed') return 'Failed';
       if (shown === 'draft') return 'Draft';
@@ -47,7 +55,7 @@
     return s.builtHash && s.currentHash && s.builtHash !== s.currentHash ? 'Needs update' : 'Ready';
   }
   function safeUrl(value) { try { var u = new URL(value); return u.protocol === 'https:' ? u.href : ''; } catch (e) { return ''; } }
-  function locked() { return statusOf(active) === 'Building'; }
+  function locked() { var status = statusOf(active); return status === 'Building' || status === 'Archiving…' || status === 'Archive paused'; }
   function mergePartial(base, incoming) {
     var next = Object.assign({}, base, incoming || {});
     next.items = incoming && Object.prototype.hasOwnProperty.call(incoming, 'items') ? normalize({ items: incoming.items }).items : base.items.slice();
@@ -117,7 +125,7 @@
     return active._dirty ? saveNow() : Promise.resolve(active);
   }
   function toggle(key) {
-    if (locked()) { showToast('This study is being built right now. Wait until it is ready before changing the shelf.'); return; }
+    if (locked()) { showToast(busyShelfMessage('changing the shelf')); return; }
     if (!item(key)) return;
     var i = active.items.indexOf(key);
     if (i >= 0) active.items.splice(i, 1); else { active.items.push(key); if (!active.name) active.name = defaultName(); }
@@ -127,7 +135,7 @@
     if (currentRoute === '#/studies/review') renderReview();
   }
   function addAll(keys, suggestedName) {
-    if (locked()) { showToast('This study is being built right now. Wait until it is ready before adding books.'); return; }
+    if (locked()) { showToast(busyShelfMessage('adding books')); return; }
     var before = active.items.slice(), added = 0, existing = 0, undoEpoch = epoch;
     unique(keys).forEach(function (key) { if (!item(key)) return; if (active.items.indexOf(key) >= 0) existing++; else { active.items.push(key); added++; } });
     if (!active.name && suggestedName) active.name = suggestedName;
@@ -136,6 +144,12 @@
     var backedUp = saveLocalAndPaint(); if (added) scheduleSave();
     var message = 'Added ' + added + ' new, ' + existing + ' already on the shelf.' + (backedUp ? '' : ' This phone could not store a backup; reconnect before closing the app.');
     showToast(message, added ? function () { if (epoch !== undoEpoch) return; active.items = before; active._dirty = true; saveLocalAndPaint(); scheduleSave(0); } : null);
+  }
+  function busyShelfMessage(action) {
+    var status = statusOf(active);
+    if (status === 'Archiving…') return 'This study is archiving. Wait until it finishes before ' + action + '.';
+    if (status === 'Archive paused') return 'This study’s archive is paused. Return to Studies and retry the archive before ' + action + '.';
+    return 'This study is being built right now. Wait until it is ready before ' + action + '.';
   }
   function slotUse(keys) {
     return 1 + unique(keys).reduce(function (sum, key) {
@@ -162,9 +176,11 @@
   }
   function buildState() {
     var status = statusOf(active);
-    if (status === 'Building') return '<div class="card build-state" role="status"><h3>Setting up “' + esc(displayName()) + '”</h3><div class="progress"><i></i></div><p><b>About 5 minutes. You can close the app.</b></p><p>We will keep working, and this study will stay in Studies.</p></div>';
+    if (status === 'Building') return '<div class="card build-state" role="status"><h3>Building…</h3><p>Setting up “' + esc(displayName()) + '”</p><div class="progress"><i></i></div><p>' + waitMessage + '</p><p>You can close the app. We will keep working, and this study will stay in Studies.</p></div>';
+    if (status === 'Archiving…') return '<div class="card build-state" role="status"><h3>Archiving…</h3><div class="progress"><i></i></div><p><b>The workspace frees itself in a few minutes.</b></p><p>This study cannot be changed while archiving finishes.</p></div>';
+    if (status === 'Archive paused') return '<div class="msg err"><b>Archive paused.</b> The workspace is still assigned and the study cannot be changed. <a href="#/studies">Return to Studies to retry archive.</a></div>';
     var notebookUrl = safeUrl(active.notebookUrl);
-    if (status === 'Ready' && notebookUrl) return '<div class="card ready-state"><h3>Ready!</h3><a class="btn gold wide" href="' + esc(notebookUrl) + '" target="_blank" rel="noopener noreferrer">Open notebook <span aria-hidden="true">↗</span></a><p>Your notebook is named <b>Study Workspace ' + String(active.workspaceNum || '').padStart(2, '0') + '</b> in Gemini.</p>' + (active.error ? '<div class="msg info"><b>The notebook is ready with a note:</b> ' + esc(active.error) + '</div>' : '') + '</div>';
+    if (status === 'Ready' && notebookUrl) return '<div class="card ready-state"><h3>Ready!</h3><a class="btn gold wide" href="' + esc(notebookUrl) + '" target="_blank" rel="noopener noreferrer">Open notebook <span aria-hidden="true">↗</span></a><p>Your notebook is named <b>Study Workspace ' + String(active.workspaceNum || '').padStart(2, '0') + '</b> in Gemini.</p><p>If the notebook still shows empty slots, wait 5 minutes, or open a source and tap \'Click to sync with Google Drive\'.</p>' + (active.error ? '<div class="msg info"><b>The notebook is ready with a note:</b> ' + esc(active.error) + '</div>' : '') + '</div>';
     if (status === 'Failed') return '<div class="msg err"><b>The study could not finish.</b> Your shelf is still saved. ' + esc(active.error || 'Try building it again, or email Matt if it keeps happening.') + '</div>';
     return '';
   }
@@ -185,7 +201,7 @@
     view.innerHTML = '<button type="button" class="btn ghost back-button" data-study-back>← Back</button><h2 class="screen-heading">Your study shelf</h2>' + buildState() +
       '<div class="card review-card"><label for="studyName">Name this study</label><input id="studyName" type="text" value="' + esc(displayName()) + '" maxlength="100" autocomplete="off"' + (isLocked ? ' disabled' : '') + '><label for="studyBy">Made by</label><input id="studyBy" type="text" value="' + esc(active.by || rememberedBy()) + '" maxlength="80" autocomplete="name" placeholder="Your name"' + (isLocked ? ' disabled' : '') + '><div id="studySync">' + syncMessage() + '</div>' +
       '<div class="slot-meter"><span><b>' + active.items.length + ' item' + (active.items.length === 1 ? '' : 's') + '</b></span><span>uses <b>' + slots + ' of 40 slots</b></span><div class="meter"><i style="width:' + Math.min(100, slots / 40 * 100) + '%"></i></div></div>' + (slots > 40 ? '<div class="msg err">This study needs ' + slots + ' slots and a workspace holds 40. Remove a few large books.</div>' : '') + grouped +
-      '<button type="button" class="btn gold wide" id="buildStudy"' + (slots > 40 || isLocked ? ' disabled' : '') + '>' + (isLocked ? 'Building your notebook…' : statusOf(active) === 'Needs update' || active.status === 'ready' ? 'Update my notebook' : 'Make my study notebook') + '</button><button type="button" class="text-action" id="saveLater">Save for later</button><div id="reviewMessage" aria-live="polite"></div></div>';
+      '<button type="button" class="btn gold wide" id="buildStudy"' + (slots > 40 || isLocked ? ' disabled' : '') + '>' + (isLocked ? (statusOf(active) === 'Archiving…' ? 'Archiving…' : statusOf(active) === 'Archive paused' ? 'Archive paused' : 'Building your notebook…') : statusOf(active) === 'Needs update' || active.status === 'ready' ? 'Update my notebook' : 'Make my study notebook') + '</button><button type="button" class="text-action" id="saveLater"' + (isLocked ? ' disabled' : '') + '>Save for later</button><div id="reviewMessage" aria-live="polite"></div></div>';
     $('studyName').addEventListener('input', function () { active.name = this.value; active._dirty = true; saveLocalAndPaint(); scheduleSave(); });
     $('studyBy').addEventListener('input', function () { active.by = this.value; active._dirty = true; try { localStorage.setItem('nccog.by', active.by); } catch (e) { localSafe = false; } saveLocalAndPaint(); scheduleSave(); });
     view.querySelectorAll('[data-remove-study]').forEach(function (b) { b.onclick = function () { toggle(b.dataset.removeStudy); }; });
@@ -193,30 +209,59 @@
     $('saveLater').onclick = function () { saveNow().then(function () { showToast('Study saved for later.'); location.hash = '#/studies'; }).catch(function () {}); };
     $('buildStudy').onclick = build;
     bindCommon();
-    if (statusOf(active) === 'Building' && !pollTimer) startPolling();
+    if ((statusOf(active) === 'Building' || statusOf(active) === 'Archiving…') && !buildPending && !archivePending[active.id] && !pollTimer) startPolling();
   }
   function build() {
     var name = $('studyName').value.trim(), by = $('studyBy').value.trim();
     if (!name || !by) { $('reviewMessage').innerHTML = '<div class="msg err">Please give the study a name and say who made it. Your shelf is still saved.</div>'; return; }
     active.name = name; active.by = by; active._dirty = true; saveLocalAndPaint();
-    $('buildStudy').disabled = true; $('reviewMessage').innerHTML = '<div class="msg info">Saving the shelf and reserving a workspace…</div>';
-    saveNow().then(function () { return api('buildStudy', code, active.id); }).then(function (result) {
-      active = mergePartial(active, result); active.status = result.status || 'queued'; saveLocalAndPaint(); upsert(active); renderReview();
+    var requested = false, myEpoch = epoch;
+    buildPending = true; stopPolling(); renderReview();
+    saveNow().then(function () { requested = true; return api('buildStudy', code, active.id); }).then(function (result) {
+      buildPending = false;
+      if (myEpoch !== epoch) return;
+      active = mergePartial(active, result); active.status = result.status || 'queued'; saveLocalAndPaint(); upsert(active); if (currentRoute === '#/studies/review') renderReview();
     }).catch(function (error) {
-      $('reviewMessage').innerHTML = '<div class="msg err">The notebook build did not start. Your shelf is still saved. ' + esc(error.message || error) + ' Check your connection and try again.</div>'; $('buildStudy').disabled = false;
+      buildPending = false;
+      if (myEpoch !== epoch) return;
+      var message = requested ? 'The build response did not arrive. Your shelf is saved; checking whether work started. ' : 'The shelf did not save, so the build was not requested. Your books are still on this phone. ';
+      function showError() {
+        if (currentRoute === '#/studies/review') { renderReview(); if ($('reviewMessage')) $('reviewMessage').innerHTML = '<div class="msg err">' + esc(message + (error.message || error)) + '</div>'; }
+        else showToast(message);
+      }
+      if (!requested) { showError(); return; }
+      // A lost response can follow a successful inline build. Reconcile before
+      // allowing another request or claiming that no work happened.
+      active.status = 'queued'; active.displayStatus = 'building'; saveLocalAndPaint();
+      api('studyStatus', code, active.id).then(function (fresh) {
+        if (myEpoch !== epoch) return;
+        active = mergePartial(active, fresh); saveLocalAndPaint(); upsert(active);
+        if (statusOf(active) !== 'Building' && statusOf(active) !== 'Ready' && statusOf(active) !== 'Failed') {
+          message = 'The build did not start. Your shelf is saved. ';
+          showError();
+        } else if (currentRoute === '#/studies/review') renderReview();
+      }).catch(function () {
+        message = 'The build status could not be confirmed. Your shelf is saved. Reconnect and check Studies before trying another build. ' + waitMessage + ' ';
+        showError();
+      });
     });
   }
   function startPolling() {
     stopPolling(); if (!active.id || !navigator.onLine || document.hidden) return;
-    var myEpoch = epoch, id = active.id, myPoll = pollToken;
+    var myEpoch = epoch, id = active.id, myPoll = pollToken, checking = false;
     function check() {
+      if (checking) return;
+      checking = true;
       api('studyStatus', code, id).then(function (result) {
         if (pollToken !== myPoll || epoch !== myEpoch || active.id !== id || currentRoute !== '#/studies/review' || document.hidden) return;
+        if (result && result.status === 'archived') {
+          upsert(result); switchTo(blankStudy()); showToast('Study archived. Its workspace is free.'); location.hash = '#/studies'; return;
+        }
         var fresh = mergePartial(active, result), pending = active._dirty;
         active = pending ? Object.assign({}, fresh, { name: active.name, by: active.by, items: active.items.slice(), _dirty: true, displayStatus: fresh.status === 'ready' ? 'needs_update' : fresh.displayStatus }) : fresh;
         upsert(active); saveLocalAndPaint(); renderReview();
-        if (statusOf(active) !== 'Building') { stopPolling(); if (active._dirty) scheduleSave(0); }
-      }).catch(function () {});
+        if (statusOf(active) !== 'Building' && statusOf(active) !== 'Archiving…') { stopPolling(); if (active._dirty) scheduleSave(0); }
+      }).catch(function () {}).finally(function () { checking = false; });
     }
     pollTimer = setInterval(check, 10000); check();
   }
@@ -225,11 +270,13 @@
     var status = statusOf(s), cls = status.toLowerCase().replace(/\s+/g, '-'), count = s.items.length;
     var built = s.builtAt ? ' · built ' + new Date(s.builtAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
     var notebookUrl = safeUrl(s.notebookUrl);
-    var action = status === 'Ready' && notebookUrl ? '<a class="btn gold study-primary" href="' + esc(notebookUrl) + '" target="_blank" rel="noopener noreferrer">Open notebook</a>' : '<button type="button" class="btn study-primary" data-open-study="' + esc(s.id) + '">' + (status === 'Needs update' ? 'Update my notebook' : status === 'Building' ? 'View progress' : 'Finish and build') + '</button>';
-    return '<article class="card study-card" data-study-card="' + esc(s.id) + '"><div class="study-card-head"><h3>' + (s.pinned ? '<span aria-label="Pinned">★</span> ' : '') + esc(s.name || 'Untitled study') + '</h3><span class="status-chip ' + cls + '">' + esc(status) + '</span></div><p class="metadata">' + count + ' item' + (count === 1 ? '' : 's') + built + '</p><div class="study-actions">' + action + '<details class="more-menu"><summary>⋯ More</summary><div><button type="button" data-open-study="' + esc(s.id) + '">Rename or edit</button><button type="button" data-duplicate-study="' + esc(s.id) + '">Duplicate</button><button type="button" data-pin-study="' + esc(s.id) + '">' + (s.pinned ? 'Unpin' : 'Pin') + '</button><button type="button" data-archive-study="' + esc(s.id) + '">Archive</button></div></details></div><div class="archive-confirm hidden" data-archive-confirm="' + esc(s.id) + '"><p>Archive this study and free its workspace? The study stays in the ledger.</p><button type="button" class="btn ghost" data-cancel-archive="' + esc(s.id) + '">Keep it</button><button type="button" class="btn" data-confirm-archive="' + esc(s.id) + '">Archive</button></div></article>';
+    var archiving = status === 'Archiving…', archivePaused = status === 'Archive paused';
+    var action = archiving || archivePaused ? '' : status === 'Ready' && notebookUrl ? '<a class="btn gold study-primary" href="' + esc(notebookUrl) + '" target="_blank" rel="noopener noreferrer">Open notebook</a>' : '<button type="button" class="btn study-primary" data-open-study="' + esc(s.id) + '">' + (status === 'Needs update' ? 'Update my notebook' : status === 'Building' ? 'View progress' : 'Finish and build') + '</button>';
+    var controls = archiving ? '<p class="msg info" role="status">Archiving… The workspace frees itself in a few minutes.</p>' : archivePaused ? '<p class="msg err">Archive paused. The workspace is still assigned.</p><button type="button" class="btn study-primary" data-retry-archive="' + esc(s.id) + '">Retry archive</button>' : '<div class="study-actions">' + action + '<details class="more-menu"><summary>⋯ More</summary><div><button type="button" data-open-study="' + esc(s.id) + '">Rename or edit</button><button type="button" data-duplicate-study="' + esc(s.id) + '">Duplicate</button><button type="button" data-pin-study="' + esc(s.id) + '">' + (s.pinned ? 'Unpin' : 'Pin') + '</button><button type="button" data-archive-study="' + esc(s.id) + '">Archive</button></div></details></div><div class="archive-confirm hidden" data-archive-confirm="' + esc(s.id) + '"><p>Archive this study and free its workspace? The study stays in the ledger.</p><button type="button" class="btn ghost" data-cancel-archive="' + esc(s.id) + '">Keep it</button><button type="button" class="btn" data-confirm-archive="' + esc(s.id) + '">Archive</button></div>';
+    return '<article class="card study-card" data-study-card="' + esc(s.id) + '"><div class="study-card-head"><h3>' + (s.pinned ? '<span aria-label="Pinned">★</span> ' : '') + esc(s.name || 'Untitled study') + '</h3><span class="status-chip ' + cls + '">' + esc(status) + '</span></div><p class="metadata">' + count + ' item' + (count === 1 ? '' : 's') + built + '</p>' + controls + '</article>';
   }
   function renderList() {
-    var view = $('studiesView'); if (!view) return; currentRoute = '#/studies'; stopPolling();
+    var view = $('studiesView'); if (!view) return; currentRoute = '#/studies'; stopPolling(); clearTimeout(listPollTimer); listPollTimer = null;
     var visible = studies.filter(function (s) { return s.status !== 'archived' && (!search || (s.name + ' ' + s.by).toLowerCase().indexOf(search.toLowerCase()) >= 0); });
     var pinned = visible.filter(function (s) { return s.pinned; }), recent = visible.filter(function (s) { return !s.pinned; }).sort(function (a, b) { return Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0); });
     var body = !studies.length && !listError ? '<div class="card empty-state"><h3>No studies yet</h3><p>A study is a notebook built from the books you pick.</p><a class="btn wide" href="#/library">Choose books in the Library</a></div>' :
@@ -241,6 +288,7 @@
     if ($('studySearch')) $('studySearch').oninput = function () { search = this.value; renderList(); var input = $('studySearch'); input.focus(); input.setSelectionRange(input.value.length, input.value.length); };
     if ($('retryStudies')) $('retryStudies').onclick = refreshList;
     bindList();
+    if (studies.some(function (s) { return statusOf(s) === 'Archiving…'; }) && navigator.onLine && !document.hidden) listPollTimer = setTimeout(refreshList, 10000);
   }
   function bindList() {
     var view = $('studiesView');
@@ -256,10 +304,29 @@
     view.querySelectorAll('[data-archive-study]').forEach(function (b) { b.onclick = function () { var box = view.querySelector('[data-archive-confirm="' + CSS.escape(b.dataset.archiveStudy) + '"]'); box.classList.remove('hidden'); }; });
     view.querySelectorAll('[data-cancel-archive]').forEach(function (b) { b.onclick = function () { b.closest('.archive-confirm').classList.add('hidden'); }; });
     view.querySelectorAll('[data-confirm-archive]').forEach(function (b) { b.onclick = function () {
-      b.disabled = true; var wait = active.id === b.dataset.confirmArchive ? flushActive() : Promise.resolve(); wait.then(function () { return api('archiveStudy', code, b.dataset.confirmArchive); }).then(function (updated) {
-        upsert(updated); if (active.id === updated.id) switchTo(blankStudy()); renderList(); refreshList();
-      }).catch(function (e) { listError = 'The study was not archived. Its workspace is unchanged. ' + (e.message || e); renderList(); });
+      requestArchive(b.dataset.confirmArchive);
     }; });
+    view.querySelectorAll('[data-retry-archive]').forEach(function (b) { b.onclick = function () {
+      requestArchive(b.dataset.retryArchive);
+    }; });
+  }
+  function requestArchive(id) {
+    if (archivePending[id]) return;
+    archivePending[id] = true; renderList();
+    var wait = active.id === id ? flushActive() : Promise.resolve();
+    wait.then(function () { return api('archiveStudy', code, id); }).then(function (updated) {
+      delete archivePending[id]; upsert(updated);
+      if (active.id === id) {
+        if (updated.status === 'archived') switchTo(blankStudy());
+        else { active = normalize(updated); saveLocalAndPaint(); }
+      }
+      if (currentRoute === '#/studies') renderList();
+      refreshList();
+    }).catch(function (e) {
+      delete archivePending[id];
+      listError = 'Archive could not be confirmed. Your saved study is kept in the ledger. Refresh Studies to check whether cleanup started before trying again. ' + (e.message || e);
+      if (currentRoute === '#/studies') renderList();
+    });
   }
   function openStudy(id) {
     flushActive().then(function () {
@@ -291,7 +358,7 @@
     var path = (hash || '#/studies').split('?')[0]; currentRoute = path;
     if (path === '#/studies/review') renderReview(); else if (path.indexOf('#/studies/') === 0) openStudy(decodeURIComponent(path.slice(10))); else { renderList(); refreshList(); }
   }
-  function hide() { currentRoute = '#/hidden'; stopPolling(); }
+  function hide() { currentRoute = '#/hidden'; stopPolling(); clearTimeout(listPollTimer); listPollTimer = null; }
   function start(accessCode) {
     code = accessCode; if (started) return; started = true; active = localGet();
     if (!active.by) active.by = rememberedBy(); if (!navigator.onLine && active._dirty) syncState = 'offline'; saveLocalAndPaint(); refreshList();
@@ -302,6 +369,7 @@
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) stopPolling();
       else if (currentRoute === '#/studies/review' && locked() && !pollTimer) startPolling();
+      else if (currentRoute === '#/studies' && studies.some(function (s) { return statusOf(s) === 'Archiving…'; })) refreshList();
     });
   }
   window.Studies = {

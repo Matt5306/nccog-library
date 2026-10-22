@@ -126,10 +126,10 @@
       var mentions = helpers.rows.filter(function (r) { var tag = r[8] || {}; return r[5] !== 'F' && Array.isArray(tag.m) && tag.m.indexOf(code) >= 0 && main.indexOf(r) < 0; });
       var faiths = helpers.rows.filter(function (r) { var tag = r[8] || {}; return r[5] === 'F' && (tag.b === 'bible' || ['b','m'].some(function (k) { return Array.isArray(tag[k]) && tag[k].indexOf(code) >= 0; })); });
       view.innerHTML = helpers.back('#/passage/book/' + code) + '<h2 class="screen-heading">' + esc(ref.label) + '</h2><a class="btn ghost" href="#/passage">Change passage</a><div id="passageStudy"></div><p class="msg info">Grouped by Bible book. These cover ' + esc(name) + ', not only ' + (ref.chapter ? 'chapter ' + esc(ref.chapter) : 'a single chapter') + '.</p>' +
-        section('Bible translations', main.filter(function (r) { return r[5] === 'B' && r[8].b === 'bible'; }), true, 'passage-bibles', true) +
+        section('Bible translations', main.filter(function (r) { return r[5] === 'B' && (r[8].b === 'bible' || Array.isArray(r[8].b)); }), true, 'passage-bibles', true) +
         section('Commentaries on ' + name, main.filter(function (r) { return r[5] === 'C'; }), true, 'passage-commentaries', true) +
         section('Sermons and teaching', main.filter(function (r) { return r[5] === 'S' || r[5] === 'U'; }), false, 'passage-sermons', true) +
-        section('Books', main.filter(function (r) { return r[5] === 'K' || r[5] === 'B' && r[8].b !== 'bible'; }), false, 'passage-books', true) +
+        section('Books', main.filter(function (r) { return r[5] === 'K' || r[5] === 'B' && !r[8].b; }), false, 'passage-books', true) +
         section('Journals and periodicals', main.filter(function (r) { return r[5] === 'J'; }), false, 'passage-journals', true) +
         section('Also mentions ' + name, mentions, false, 'passage-mentions', true) +
         '<section class="card"><h3>Other Faiths (' + faiths.length.toLocaleString() + ')</h3><p class="hint">Off by default. Never included in Add all.</p><button class="btn ghost wide" id="passageOther" aria-expanded="false">Include Other Faiths</button><div id="passageFaithRows" class="hidden"></div></section>';

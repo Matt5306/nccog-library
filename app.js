@@ -17,15 +17,21 @@
   function call(fn) {
     var args = Array.prototype.slice.call(arguments, 1);
     if (!navigator.onLine) return Promise.reject(new Error('No internet connection. Nothing was sent. Try again when you are back online.'));
-    return fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: ACTIONS[fn], args: args }) })
-      .then(function (r) { if (!r.ok) throw new Error('The library server did not answer (HTTP ' + r.status + '). Nothing was saved. Try again in a minute.'); return r.json(); })
+    var controller = fn === 'buildStudy' || fn === 'archiveStudy' ? new AbortController() : null;
+    var timer = controller ? setTimeout(function () { controller.abort(); }, 30000) : null;
+    return fetch(API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: ACTIONS[fn], args: args }), signal: controller ? controller.signal : undefined })
+      .then(function (r) { if (!r.ok) throw new Error('The library server did not answer (HTTP ' + r.status + '). The request may have reached the server. Check its saved result before retrying.'); return r.json(); })
       .then(function (j) { if (!j.ok) throw new Error(j.error || 'Something went wrong.'); return j.data; })
-      .catch(function (e) { if (e instanceof TypeError) throw new Error('Could not reach the library server. Check your internet and try again. Nothing was saved.'); throw e; });
+      .catch(function (e) {
+        if (e.name === 'AbortError') throw new Error('The server response took longer than 30 seconds. Work may still be continuing. Check Studies before trying again.');
+        if (e instanceof TypeError) throw new Error('The library server response was lost. Check your connection and the saved result before retrying.');
+        throw e;
+      }).finally(function () { if (timer) clearTimeout(timer); });
   }
   function friendly(e) {
     var m = (e && e.message) || String(e);
     m = m.replace(/^Exception:\s*/, '');
-    if (/Exceeded maximum execution time/i.test(m)) m = 'That took too long and was stopped. Nothing was saved. For long videos, try again with a shorter length, or email Matt.';
+    if (/Exceeded maximum execution time/i.test(m)) m = 'That request took too long and was stopped. Some work may already be saved. Check the library or Studies before retrying, or email Matt if the result is unclear.';
     return esc(m) + '<br><small>Need help? <a href="mailto:mstaton53@gmail.com?subject=Notebook%20Library%20app%20problem">Email Matt</a></small>';
   }
   window.AppAPI = { call: call, friendly: friendly, code: function () { return state.code; } };
@@ -277,7 +283,7 @@
     }
     var links = r.shelves.map(function (s) { return '<a href="' + esc(s.url) + '" target="_blank">' + esc(s.name) + '</a>'; }).join(', ');
     msg('addMsg', 'ok', '<b>✓ Added to “' + esc(r.notebook) + '”</b> (' + Number(r.words).toLocaleString() + ' words).<br>' +
-      'Saved on: ' + links + '<br><b>Ready in about 5 minutes.</b> The notebook picks it up by itself.' +
+      'Saved on: ' + links + '<br>Allow about 10–15 minutes. Gemini can take a few extra minutes to show the new books after the app says Ready.' +
       (r.note ? '<br><small>' + esc(r.note) + '</small>' : '') +
       (r.notebookUrl ? '<p><a class="btn small" href="' + esc(r.notebookUrl) + '" target="_blank">Open the notebook</a></p>' : ''));
     $('titleIn').value = ''; $('pasteIn').value = ''; $('ytUrl').value = ''; $('fileIn').value = ''; $('audioIn').value = '';
