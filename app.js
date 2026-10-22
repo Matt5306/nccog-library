@@ -27,23 +27,86 @@
     return esc(m) + '<br><small>Need help? <a href="mailto:mstaton53@gmail.com?subject=Notebook%20Library%20app%20problem">Email Matt</a></small>';
   }
 
-  // ---------- tabs ----------
-  function showTab(name) {
-    ['add', 'library', 'help', 'admin'].forEach(function (t) { var s = $('tab-' + t); if (s) s.classList.toggle('hidden', t !== name); });
-    Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) { b.classList.toggle('on', b.dataset.tab === name); });
-    if (name === 'library') loadCatalog();
-    if (name === 'admin') loadAdmin();
+  // ---------- routes, tabs, and lazy document readers ----------
+  var entered = false, liveRequest = null, readers = null;
+  var sharedInput = new URLSearchParams(location.search);
+  var wasShared = ['url', 'text', 'title'].some(function (k) { return sharedInput.has(k); });
+  function loadScript(url, globalName) {
+    if (window[globalName]) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script'), finished = false;
+      var timer = setTimeout(function () { finish(new Error('Reader loading timed out')); }, 15000);
+      function finish(error) { if (finished) return; finished = true; clearTimeout(timer); s.onload = s.onerror = null; if (error) { s.remove(); reject(error); } else resolve(); }
+      s.src = url; s.onload = function () { finish(window[globalName] ? null : new Error('Reader unavailable')); }; s.onerror = function () { finish(new Error('Reader unavailable')); };
+      document.head.appendChild(s);
+    });
   }
-  Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) {
-    b.addEventListener('click', function () { showTab(b.dataset.tab); });
+  function loadReaders() {
+    if (readers) return readers;
+    readers = Promise.all([
+      loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'JSZip'),
+      loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', 'pdfjsLib')
+    ]).then(function () { $('addReadersMsg').classList.add('hidden'); }).catch(function () {
+      readers = null; $('addReadersMsg').classList.remove('hidden');
+      msg('addReadersMsg', 'info', 'The PDF or EPUB reader did not load. Nothing was changed. Text, YouTube and audio still work when connected. Check your connection, then <button class="btn ghost wide" id="retryReaders">Try readers again</button>.');
+      $('retryReaders').onclick = loadReaders;
+    });
+    return readers;
+  }
+  window.refreshLibraryLinks = function () {
+    if (liveRequest || !navigator.onLine) return liveRequest;
+    var expired = false, timer = setTimeout(function () { expired = true; Library.liveFailed(); liveRequest = null; }, 90000);
+    liveRequest = call('getCatalog', state.code).then(function (c) {
+      if (expired) return;
+      state.catalog = c; fillNotebookSelect(); Library.setLive(c);
+    }).catch(function () { if (!expired) Library.liveFailed(); }).finally(function () { clearTimeout(timer); if (!expired) liveRequest = null; });
+    return liveRequest;
+  };
+  function showTab(name) {
+    ['add', 'library', 'studies', 'help'].forEach(function (t) { $('tab-' + t).classList.toggle('hidden', t !== name); });
+    document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); b.setAttribute('aria-pressed', String(b.dataset.tab === name)); });
+    store.set('tab', name);
+    if (name === 'library') Library.show(location.hash);
+    if (name === 'add') { loadReaders(); if (!state.catalog) window.refreshLibraryLinks(); }
+  }
+  function route() {
+    if (!entered) return;
+    var hash = location.hash || '#/library', base = hash.split('?')[0];
+    var name = /^#\/(library|notebook|item)(\/|$)/.test(base) ? 'library' : base.slice(2);
+    if (['library', 'studies', 'add', 'help'].indexOf(name) < 0) { history.replaceState(null, '', '#/library'); name = 'library'; }
+    showTab(name);
+    // A fresh history entry is a child screen; a direct link still has a safe Back destination.
+    if (!history.state) history.replaceState({ inApp: true, scroll: 0 }, '', location.href);
+    requestAnimationFrame(function () { window.scrollTo(0, history.state && history.state.scroll || 0); });
+  }
+  document.querySelectorAll('#tabs button').forEach(function (b) {
+    b.addEventListener('click', function () { store.set('tab', b.dataset.tab); location.hash = '#/' + b.dataset.tab; });
   });
+  window.addEventListener('hashchange', route);
+  document.addEventListener('click', function (e) {
+    var link = e.target.closest('a[href^="#/"]');
+    if (link) history.replaceState(Object.assign({}, history.state, { scroll: window.scrollY }), '', location.href);
+  });
+  if ($('installSteps')) {
+    var ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+    var android = /Android/.test(navigator.userAgent);
+    $('installSteps').innerHTML = ios
+      ? '<li>Open this library in <b>Safari</b> on your iPhone or iPad.</li><li>Tap <b>Share</b> (the square with an upward arrow).</li><li>Choose <b>Add to Home Screen</b>, then <b>Add</b>.</li>'
+      : android ? '<li>Open this library in <b>Chrome</b> on your Android phone.</li><li>Tap the <b>three-dot menu</b> at the top.</li><li>Choose <b>Add to Home screen</b> or <b>Install app</b>, then confirm.</li>'
+      : '<li>On iPhone or iPad, open the library in <b>Safari</b>. Tap <b>Share</b>, then <b>Add to Home Screen</b>.</li><li>On Android, open it in <b>Chrome</b>. Tap the <b>three-dot menu</b>, then <b>Add to Home screen</b>.</li><li>On a computer, bookmark this page to come back anytime.</li>';
+  }
 
   // ---------- gate ----------
   function enterApp() {
+    if (entered) return;
+    entered = true;
     $('gate').classList.add('hidden');
     $('tabs').classList.remove('hidden');
-    showTab('add');
-    call('getCatalog', state.code).then(function (c) { state.catalog = c; fillNotebookSelect(); }).catch(function () {});
+    Library.start(state.code);
+    var last = store.get('tab'), initial = wasShared ? '#/add' : location.hash || '#/' + (['library', 'studies', 'add', 'help'].indexOf(last) >= 0 ? last : 'library');
+    history.replaceState({ inApp: false, scroll: 0 }, '', location.pathname + initial);
+    route();
+    window.refreshLibraryLinks();
   }
   function tryCode(code) {
     return call('verifyCode', code).then(function () { state.code = code; store.set('code', code); enterApp(); });
@@ -56,7 +119,8 @@
   });
   $('codeIn').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('codeBtn').click(); });
 
-  call('getPublicInfo').then(function (info) {
+  if (!navigator.onLine && state.code && state.code !== '__owner__') enterApp();
+  else call('getPublicInfo').then(function (info) {
     if (!info.ready && !info.isOwner) {
       $('gate').classList.remove('hidden');
       msg('gateMsg', 'info', 'The app is still being set up. Please try again later, or email Matt.');
@@ -64,9 +128,9 @@
     }
     if (info.isOwner) { state.code = state.code || '__owner__'; }
     if (state.code && state.code !== '__owner__') {
-      tryCode(state.code).catch(function () { $('gate').classList.remove('hidden'); });
+      tryCode(state.code).catch(function (e) { $('gate').classList.remove('hidden'); msg('gateMsg', 'err', friendly(e)); });
     } else if (info.isOwner) {
-      $('tabs').classList.remove('hidden'); showTab(info.ready ? 'add' : 'admin');
+      enterApp();
     } else {
       $('gate').classList.remove('hidden');
     }
@@ -77,8 +141,8 @@
   function pick(groupId, key, after) {
     Array.prototype.forEach.call(document.querySelectorAll('#' + groupId + ' .choice'), function (b) {
       b.addEventListener('click', function () {
-        Array.prototype.forEach.call(document.querySelectorAll('#' + groupId + ' .choice'), function (x) { x.classList.remove('on'); });
-        b.classList.add('on'); state[key] = b.dataset.v; if (after) after();
+        Array.prototype.forEach.call(document.querySelectorAll('#' + groupId + ' .choice'), function (x) { x.classList.remove('on'); x.setAttribute('aria-pressed', 'false'); });
+        b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); state[key] = b.dataset.v; if (after) after();
       });
     });
   }
@@ -158,8 +222,8 @@
     if (!f) return;
     $('fileInfo').textContent = 'Reading ' + f.name + '…';
     var name = f.name.toLowerCase(), p;
-    if (name.endsWith('.pdf')) p = readAsBuffer(f).then(pdfText);
-    else if (name.endsWith('.epub')) p = readAsBuffer(f).then(epubText);
+    if (name.endsWith('.pdf')) p = loadReaders().then(function () { return readAsBuffer(f); }).then(pdfText);
+    else if (name.endsWith('.epub')) p = loadReaders().then(function () { return readAsBuffer(f); }).then(epubText);
     else if (name.endsWith('.txt')) p = readAsText(f);
     else { $('fileInfo').textContent = 'Please choose a PDF, EPUB or TXT file.'; return; }
     p.then(function (t) {
@@ -204,7 +268,7 @@
   function showResult(r) {
     if (r.status === 'choose') {
       var html = 'Not sure where this fits best. <b>Pick a notebook:</b><div class="choices" style="margin-top:10px">' +
-        r.options.map(function (o) { return '<button class="choice' + (o === r.suggestion ? ' on' : '') + '" data-nb="' + esc(o) + '"><b>' + esc(o) + '</b>' +
+        r.options.map(function (o) { return '<button class="choice' + (o === r.suggestion ? ' on' : '') + '" aria-pressed="' + (o === r.suggestion) + '" data-nb="' + esc(o) + '"><b>' + esc(o) + '</b>' +
           (o === r.suggestion ? '<span>suggested</span>' : '') + '</button>'; }).join('') + '</div>';
       msg('addMsg', 'info', html);
       Array.prototype.forEach.call(document.querySelectorAll('#addMsg [data-nb]'), function (b) {
@@ -219,6 +283,7 @@
       (r.notebookUrl ? '<p><a class="btn small" href="' + esc(r.notebookUrl) + '" target="_blank">Open the notebook</a></p>' : ''));
     $('titleIn').value = ''; $('pasteIn').value = ''; $('ytUrl').value = ''; $('fileIn').value = ''; $('audioIn').value = '';
     state.fileText = ''; $('fileInfo').textContent = ''; state.catalog = null;
+    window.refreshLibraryLinks();
   }
 
   function run(extra) {
@@ -229,37 +294,6 @@
       .then(function () { $('addBtn').disabled = false; });
   }
   $('addBtn').addEventListener('click', function () { run(); });
-
-  // ---------- library ----------
-  function loadCatalog() {
-    var draw = function (c) {
-      state.catalog = c;
-      $('nbList').innerHTML = c.notebooks.length ? c.notebooks.map(function (n) {
-        return '<div class="nb"><div><b>' + esc(n.name) + '</b><small>' + esc(n.description) + '</small>' +
-          (n.intake ? '<small>' + n.shelvesFree + ' of ' + n.shelvesTotal + ' shelves free</small>' : '<small>Reference library</small>') + '</div>' +
-          (n.url ? '<a class="btn small" href="' + esc(n.url) + '" target="_blank">Open</a>' : '') + '</div>';
-      }).join('') : 'No notebooks yet.';
-      drawItems();
-    };
-    if (state.catalog) draw(state.catalog);
-    call('getCatalog', state.code).then(draw).catch(function (e) { $('nbList').innerHTML = '<div class="msg err">' + friendly(e) + '</div>'; });
-  }
-  function drawItems() {
-    var q = $('searchIn').value.trim().toLowerCase();
-    var items = (state.catalog ? state.catalog.items : []).filter(function (it) {
-      return !q || [it.title, it.author, it.topics, it.notebook, it.summary, it.type].join(' ').toLowerCase().indexOf(q) >= 0;
-    });
-    var nbUrl = {}; (state.catalog ? state.catalog.notebooks : []).forEach(function (n) { nbUrl[n.name] = n.url; });
-    $('itemList').innerHTML = items.length ? items.map(function (it) {
-      return '<div class="item"><div class="t">' + esc(it.title) + '</div>' +
-        '<div class="m">' + esc(it.type) + (it.author ? ' · ' + esc(it.author) : '') + (it.date ? ' · ' + esc(it.date) : '') +
-        ' · in <a href="' + esc(nbUrl[it.notebook] || '#') + '" target="_blank">' + esc(it.notebook) + '</a>' +
-        ' · <a href="' + esc(it.shelfUrl) + '" target="_blank">read the text</a></div>' +
-        (it.summary ? '<div class="m">' + esc(it.summary) + '</div>' : '') +
-        (it.topics ? String(it.topics).split(',').map(function (t) { return '<span class="tag">' + esc(t.trim()) + '</span>'; }).join('') : '') + '</div>';
-    }).join('') : (q ? 'Nothing matches “' + esc(q) + '”.' : 'Nothing added yet. Use the ➕ Add tab.');
-  }
-  $('searchIn').addEventListener('input', drawItems);
 
   // ---------- Android share menu: prefill a shared YouTube link or text ----------
   (function () {
@@ -276,8 +310,10 @@
       document.querySelector('#srcChoices [data-v=paste]').click();
       $('pasteIn').value = shared;
     }
-    history.replaceState(null, '', location.pathname);
+    history.replaceState(null, '', location.pathname + '#/add');
   })();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {
+    $('offlineBanner').classList.remove('hidden'); $('offlineBanner').textContent = 'Offline opening could not be prepared. The library still works online. Reopen it when connected to try again.';
+  });
 })();
 
