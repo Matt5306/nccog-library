@@ -1,8 +1,8 @@
 // Only this application's shell and the pinned search dependency belong here.
 // Public catalog data is versioned in IndexedDB. API requests are never cached.
-var CACHE = 'nccog-library-phase1-v2';
+var CACHE = 'nccog-library-phase3-v1';
 var SEARCH = 'https://cdn.jsdelivr.net/npm/minisearch@7.2.0/dist/umd/index.min.js';
-var SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'library.js', 'search-worker.js', 'manifest.webmanifest', 'data/version.json', 'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png', 'icons/maskable-512.png'];
+var SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'library.js', 'studies.js', 'passages.js', 'install.js', 'search-worker.js', 'manifest.webmanifest', 'data/version.json', 'icons/logo.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-192.png', 'icons/maskable-512.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) {
     return c.addAll(SHELL).then(function () {

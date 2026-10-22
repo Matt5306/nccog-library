@@ -3,7 +3,7 @@
   'use strict';
   var kinds = { B: 'Bibles', C: 'Commentaries', S: 'Sermons', K: 'Books', J: 'Journals & Periodicals', U: 'Courses', F: 'Other Faiths' };
   var descriptions = { B: 'Translations & reference', C: 'Explore the Bible', S: 'Preaching & teaching', K: 'Faith, history & Christian life', J: 'Journals & historic periodicals', U: 'Learn at your own pace', F: 'A separate reference shelf' };
-  var data, live, rows = [], notebooks = [], byKey = new Map(), additions = new Map(), recent = [];
+  var data, live, rows = [], notebooks = [], byKey = new Map(), additions = new Map(), recent = [], aliasKeys = new Map();
   var worker, indexTimer, ready = false, started = false, request = 0, results = [], route = '', query = '', kind = '', nb = null, other = false, shown = 50, debounce;
   var searchError = '', loading = '', catalogError = '', cacheWarning = '', liveWarning = '', refreshPromise, code = '', restoreScroll = null;
   var metrics = { indexBuildMs: null, searchMs: null, catalogSource: '', resultCount: 0 };
@@ -36,7 +36,7 @@
   function valid(c) {
     return c && typeof c.version === 'string' && Array.isArray(c.items) && c.count === c.items.length && Array.isArray(c.notebooks) &&
       c.notebooks.every(function (n, i) { return n.i === i && kinds[n.kind] && typeof n.name === 'string'; }) &&
-      c.items.every(function (r) { return r.length === 6 && typeof r[0] === 'string' && typeof r[1] === 'string' && typeof r[2] === 'string' && c.notebooks[r[4]] && r[5] === c.notebooks[r[4]].kind; });
+      c.items.every(function (r) { return r.length >= 6 && typeof r[0] === 'string' && typeof r[1] === 'string' && typeof r[2] === 'string' && c.notebooks[r[4]] && r[5] === c.notebooks[r[4]].kind; });
   }
   function fetchJSON(path) {
     var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 15000);
@@ -103,6 +103,14 @@
     recent.sort(function (a, b) { return b.added - a.added; });
     recent = recent.filter(function (item, i, all) { return all.findIndex(function (x) { return x.row[0] === item.row[0]; }) === i; }).slice(0, 10);
     byKey = new Map(rows.map(function (r) { return [r[0], r]; }));
+    aliasKeys = new Map();
+    Object.keys(data.aliases || {}).forEach(function (key) {
+      var target = data.aliases[key];
+      if (!byKey.has(target)) return;
+      var item = byKey.get(target).slice(); item[0] = key; byKey.set(key, item);
+      if (!aliasKeys.has(target)) aliasKeys.set(target, []);
+      aliasKeys.get(target).push(key);
+    });
     if (nb !== null && notebooks[nb] && notebooks[nb].kind === 'F' && !new URLSearchParams(location.hash.split('?')[1] || '').has('other')) other = true;
     buildIndex(); render(); notices();
   }
@@ -147,36 +155,51 @@
   }
   function rowHTML(r) {
     var n = notebooks[r[4]], added = additions.get(r[0]);
-    return '<article class="result-row" data-kind="' + esc(r[5]) + '"><a class="result-row-link" href="#/item/' + encodeURIComponent(r[0]) + '" aria-label="Details: ' + esc(r[1]) + '"><span class="result-copy"><span class="result-title">' + esc(r[1]) + '</span><span class="metadata">' + esc([r[2] || 'Author not listed', r[3] || 'Year not listed', n.name].join(' · ')) + '</span>' +
-      (added ? '<span class="added-by">Added by ' + esc(added.by || 'a library member') + '</span>' : '') +
-      '</span><span class="result-action">Details <span aria-hidden="true">→</span></span></a></article>';
+    return '<article class="result-row" data-kind="' + esc(r[5]) + '"><div class="result-row-main"><a class="result-row-link" href="#/item/' + encodeURIComponent(r[0]) + '" aria-label="Details: ' + esc(r[1]) + '"><span class="result-copy"><span class="result-title">' + esc(r[1]) + '</span><span class="metadata">' + esc([r[2] || 'Author not listed', r[3] || 'Year not listed', n.name].join(' · ')) + '</span>' +
+      (r[9] ? '<span class="metadata">Part of a bundle</span>' : '') + (added ? '<span class="added-by">Added by ' + esc(added.by || 'a library member') + '</span>' : '') +
+      '</span><span class="result-action">Details <span aria-hidden="true">→</span></span></a>' + shelfButton(r[0]) + '</div></article>';
+  }
+  function shelfButton(key) {
+    var catalogKey = key; key = shelfKey(key);
+    var on = window.Studies && Studies.has(key), locked = window.Studies && Studies.locked();
+    return '<button type="button" class="shelf-toggle' + (on ? ' on' : '') + '" data-catalog-key="' + esc(catalogKey) + '" data-shelf-key="' + esc(key) + '" aria-pressed="' + String(!!on) + '"' + (locked ? ' disabled' : '') + '>' + (locked ? 'Building…' : on ? '✓ On shelf' : '+ Add to shelf') + '</button>';
+  }
+  function shelfKey(key) {
+    var canonical = data && data.aliases && data.aliases[key] || key;
+    if (window.Studies && Studies.has(canonical)) return canonical;
+    return (aliasKeys.get(canonical) || []).find(function (alias) { return window.Studies && Studies.has(alias); }) || canonical;
   }
   function render() {
-    if (!$('libraryView') || !/^#\/(library|notebook|item)(\/|$)/.test(path())) return;
+    if (!$('libraryView') || !/^#\/(library|notebook|item|passage)(\/|$)/.test(path())) return;
     var view = $('libraryView');
     if (!data) { view.innerHTML = '<h2 class="screen-heading">Library</h2><div class="card empty-state" role="status"><h3>' + esc(catalogError ? 'The library is not ready yet' : loading || 'Getting the library ready…') + '</h3><p>Books, sermons and a place to keep learning.</p></div>'; return; }
+    if (/^#\/passage(\/|$)/.test(route)) { Passages.render(view, { rows: rows, rowHTML: rowHTML, back: back, bind: bind, shelfKey: shelfKey }); return; }
     if (route.startsWith('#/item/')) {
       var item = byKey.get(decodeURIComponent(route.slice(7)));
       if (!item) { view.innerHTML = back('#/library') + '<div class="card empty-state"><h2>This book or sermon is not in the saved library.</h2><p>Try updating the library, or return to Library and search by title.</p><button class="btn" id="retryItem">Update library</button></div>'; $('retryItem').onclick = function () { refresh(); if (window.refreshLibraryLinks) window.refreshLibraryLinks(); }; bind(); return; }
       var notebook = notebooks[item[4]], extra = additions.get(item[0]);
-      view.innerHTML = back('#/library') + '<article class="card detail-card"><p class="eyebrow">' + esc(kinds[item[5]]) + '</p><h2 class="screen-heading">' + esc(item[1]) + '</h2><dl class="detail-meta"><dt>Author</dt><dd>' + esc(item[2] || 'Not listed') + '</dd><dt>Year</dt><dd>' + esc(item[3] || 'Not listed') + '</dd><dt>Notebook</dt><dd>' + esc(notebook.name) + '</dd></dl>' + (extra ? '<p class="added-by">Added by ' + esc(extra.by || 'a library member') + '</p>' : '') + openNotebook(notebook) + '<a class="btn ghost wide" href="#/notebook/' + notebook.i + '">See this notebook</a></article>';
+      view.innerHTML = back('#/library') + '<article class="card detail-card"><p class="eyebrow">' + esc(kinds[item[5]]) + '</p><h2 class="screen-heading">' + esc(item[1]) + '</h2><dl class="detail-meta"><dt>Author</dt><dd>' + esc(item[2] || 'Not listed') + '</dd><dt>Year</dt><dd>' + esc(item[3] || 'Not listed') + '</dd><dt>Notebook</dt><dd>' + esc(notebook.name) + '</dd></dl>' + (extra ? '<p class="added-by">Added by ' + esc(extra.by || 'a library member') + '</p>' : '') + shelfButton(item[0]) + openNotebook(notebook) + '<a class="btn ghost wide" href="#/notebook/' + notebook.i + '">See this notebook</a></article>';
       bind(); return;
     }
     var inNotebook = nb !== null, current = inNotebook && notebooks[nb], scoped = kind || inNotebook, active = query || scoped;
     if (inNotebook && !current) { view.innerHTML = back('#/library') + '<div class="card empty-state"><h2>Notebook not found</h2><p>Return to Library to choose a notebook.</p></div>'; bind(); return; }
     var head = scoped ? back('#/library') : '';
     head += '<h2 id="library-heading" class="screen-heading">' + esc(current ? current.name : kind ? kinds[kind] : 'Library') + '</h2>';
-    if (current) head += '<div class="card detail-card"><p>' + esc(current.description || 'Browse the books and sermons saved in this notebook.') + '</p><p class="metadata">' + number(current.n) + ' books and sermons · ' + esc(kinds[current.kind]) + '</p>' + openNotebook(current) + '</div>';
+    if (current) {
+      var notebookKeys = rows.filter(function (r) { return r[4] === current.i && (r[5] !== 'F' || current.kind === 'F'); }).map(function (r) { return r[0]; });
+      head += '<div class="card detail-card"><p>' + esc(current.description || 'Browse the books and sermons saved in this notebook.') + '</p><p class="metadata">' + number(current.n) + ' books and sermons · ' + esc(kinds[current.kind]) + '</p><button type="button" class="btn gold wide" id="addNotebook" data-notebook-name="' + esc(current.name) + '"' + (Studies.locked() ? ' disabled' : '') + '>' + (Studies.locked() ? 'Building your notebook…' : '+ Add all ' + number(notebookKeys.length)) + '</button>' + openNotebook(current) + '</div>';
+    }
     else if (!kind) head += '<p class="intro' + (active ? ' hidden' : '') + '" id="libraryIntro">' + number(data.count) + ' books and sermons in ' + number(data.notebooks.length) + ' notebooks</p>';
-    head += '<div class="search-box"><label for="searchIn">' + (current ? 'Search this notebook' : 'Find a book or sermon') + '</label><div class="search-input-wrap"><input id="searchIn" type="search" autocomplete="off" placeholder="' + esc(scoped ? 'Search ' + (current ? 'this notebook' : kinds[kind]) : 'Search ' + number(data.count) + ' books and sermons') + '" value="' + esc(query) + '"><button type="button" id="clearSearch" class="search-clear' + (query ? '' : ' hidden') + '" aria-label="Clear search" title="Clear search"><span aria-hidden="true">×</span></button></div></div><div id="searchTools"></div><div id="searchResults" aria-live="polite" aria-atomic="false"></div>';
-    head += '<div id="libraryHome"' + (active ? ' class="hidden"' : '') + '><h3 class="section-heading">Browse</h3><div class="kind-grid">' + Object.keys(kinds).map(function (k) {
+    head += '<div class="search-box"><label for="searchIn">' + (current ? 'Search this notebook' : 'Find a book, sermon or Bible passage') + '</label><div class="search-input-wrap"><input id="searchIn" type="search" autocomplete="off" placeholder="' + esc(scoped ? 'Search ' + (current ? 'this notebook' : kinds[kind]) : 'Search ' + number(data.count) + ' books and sermons') + '" value="' + esc(query) + '"><button type="button" id="clearSearch" class="search-clear' + (query ? '' : ' hidden') + '" aria-label="Clear search" title="Clear search"><span aria-hidden="true">×</span></button></div></div><div id="passageSuggestion" aria-live="polite"></div><div id="searchTools"></div><div id="searchResults" aria-live="polite" aria-atomic="false"></div>';
+    head += '<div id="libraryHome"' + (active ? ' class="hidden"' : '') + '><a class="card passage-home" href="#/passage"><b>Study a Bible passage →</b><span>Pick a book and chapter</span></a><h3 class="section-heading">Browse</h3><div class="kind-grid">' + Object.keys(kinds).map(function (k) {
       var count = notebooks.filter(function (n) { return n.kind === k; }).reduce(function (sum, n) { return sum + n.n; }, 0);
       return '<a class="kind-tile" href="#/library/kind/' + k + '"><span class="kind-count">' + number(count) + '</span><b>' + esc(kinds[k]) + '</b><span>' + esc(descriptions[k]) + '</span></a>';
     }).join('') + '</div><details class="card notebook-list"><summary>Notebooks <span class="muted">A–Z · ' + notebooks.length + '</span></summary>' + notebooks.slice().sort(function (a, b) { return a.name.localeCompare(b.name); }).map(function (n) { return '<a class="notebook-link" href="#/notebook/' + n.i + '"><span>' + esc(n.name) + '</span><span class="muted">' + number(n.n) + ' <span aria-hidden="true">→</span></span></a>'; }).join('') + '</details><h3 class="section-heading">Recently added</h3><div class="result-list">' + (recent.length ? recent.map(function (x) { return rowHTML(x.row); }).join('') : '<div class="card empty-state"><p>' + (live ? 'No recent additions yet. Share a sermon, book or notes from the Add tab.' : 'Connecting to recent additions… Your books and sermons are ready to browse.') + '</p><a class="btn ghost" href="#/add">Add to the library</a></div>') + '</div></div>';
     view.innerHTML = head;
-    $('searchIn').addEventListener('input', function () { query = this.value.trim(); shown = 50; $('clearSearch').classList.toggle('hidden', !query); remember(); clearTimeout(debounce); debounce = setTimeout(doSearch, 100); });
-    $('clearSearch').onclick = function () { query = ''; shown = 50; $('searchIn').value = ''; this.classList.add('hidden'); remember(); doSearch(); $('searchIn').focus(); };
-    bind(); doSearch();
+    $('searchIn').addEventListener('input', function () { query = this.value.trim(); Passages.suggest(query); shown = 50; $('clearSearch').classList.toggle('hidden', !query); remember(); clearTimeout(debounce); debounce = setTimeout(doSearch, 100); });
+    $('clearSearch').onclick = function () { query = ''; Passages.suggest(''); shown = 50; $('searchIn').value = ''; this.classList.add('hidden'); remember(); doSearch(); $('searchIn').focus(); };
+    $('searchIn').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); Passages.openQuery(query); } });
+    Passages.suggest(query); bind(); doSearch();
   }
   function searchTools() {
     if (!$('searchTools')) return;
@@ -214,10 +237,16 @@
     if ($('retrySearch')) $('retrySearch').onclick = function () { buildIndex(); updateResults(); };
     if ($('emptyClear')) $('emptyClear').onclick = function () { if (query) $('clearSearch').click(); else location.hash = '#/library'; };
     if ($('showMore')) $('showMore').onclick = function () { var scroll = window.scrollY; shown += 50; remember(); updateResults(); window.scrollTo(0, scroll); var firstNew = el.querySelectorAll('.result-row a')[shown - 50]; if (firstNew) firstNew.focus({ preventScroll: true }); };
+    bind();
     if (restoreScroll !== null && (ready || !query)) { var scroll = restoreScroll; restoreScroll = null; requestAnimationFrame(function () { window.scrollTo(0, scroll); }); }
   }
   function bind() {
     $('libraryView').querySelectorAll('[data-back]').forEach(function (b) { b.onclick = function () { if (history.state && history.state.inApp) history.back(); else location.hash = b.dataset.back; }; });
+    $('libraryView').querySelectorAll('[data-shelf-key]').forEach(function (b) { b.onclick = function () { Studies.toggle(b.dataset.shelfKey); }; });
+    if ($('addNotebook') && nb !== null) $('addNotebook').onclick = function () {
+      var current = notebooks[nb];
+      Studies.addAll(rows.filter(function (r) { return r[4] === nb && (r[5] !== 'F' || current.kind === 'F'); }).map(function (r) { return shelfKey(r[0]); }), current.name + ' Study');
+    };
   }
   function show(hash) {
     restoreScroll = history.state && history.state.scroll || 0;
@@ -231,6 +260,15 @@
   }
   window.Library = {
     metrics: metrics, show: show, refresh: refresh, setLive: setLive, liveFailed: liveFailed,
+    getItem: function (key) { return byKey.get(key) || null; },
+    kindName: function (kindCode) { return kinds[kindCode] || 'Other'; },
+    shelfChanged: function () {
+      if (window.Passages) Passages.paintStudy();
+      document.querySelectorAll('[data-shelf-key]').forEach(function (b) {
+        b.dataset.shelfKey = shelfKey(b.dataset.catalogKey || b.dataset.shelfKey);
+        var on = Studies.has(b.dataset.shelfKey), locked = Studies.locked(); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.disabled = locked; b.textContent = locked ? 'Building…' : on ? '✓ On shelf' : '+ Add to shelf';
+      });
+    },
     start: function (accessCode) {
       code = accessCode; if (started) return; started = true; loading = 'Getting the library ready…';
       readSaved('links:' + code).then(function (saved) { if (!live && saved) setLive(saved, true); }).catch(function () {});

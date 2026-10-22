@@ -11,7 +11,9 @@
   function msg(el, kind, html) { $(el).innerHTML = html ? '<div class="msg ' + kind + '">' + html + '</div>' : ''; }
   function busy(el, text) { $(el).innerHTML = '<div class="msg info">' + esc(text) + '<div class="progress"><i></i></div></div>'; }
   var API = 'https://script.google.com/macros/s/AKfycbyBwzkNdR2GQeZgReO4uOgmC2V_mQeMuFRCeIpbOvv7tsTYfWCeoi8Gz1_7ZZCCQ7Z8/exec';
-  var ACTIONS = { getPublicInfo: 'publicInfo', verifyCode: 'verifyCode', getCatalog: 'catalog', addItem: 'addItem' };
+  var ACTIONS = { getPublicInfo: 'publicInfo', verifyCode: 'verifyCode', getCatalog: 'catalog', addItem: 'addItem',
+    listStudies: 'listStudies', getStudy: 'getStudy', saveStudy: 'saveStudy', buildStudy: 'buildStudy',
+    studyStatus: 'studyStatus', archiveStudy: 'archiveStudy', pinStudy: 'pinStudy', workspaceStats: 'workspaceStats' };
   function call(fn) {
     var args = Array.prototype.slice.call(arguments, 1);
     if (!navigator.onLine) return Promise.reject(new Error('No internet connection. Nothing was sent. Try again when you are back online.'));
@@ -26,6 +28,7 @@
     if (/Exceeded maximum execution time/i.test(m)) m = 'That took too long and was stopped. Nothing was saved. For long videos, try again with a shorter length, or email Matt.';
     return esc(m) + '<br><small>Need help? <a href="mailto:mstaton53@gmail.com?subject=Notebook%20Library%20app%20problem">Email Matt</a></small>';
   }
+  window.AppAPI = { call: call, friendly: friendly, code: function () { return state.code; } };
 
   // ---------- routes, tabs, and lazy document readers ----------
   var entered = false, liveRequest = null, readers = null;
@@ -67,12 +70,14 @@
     document.querySelectorAll('#tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.tab === name); b.setAttribute('aria-pressed', String(b.dataset.tab === name)); });
     store.set('tab', name);
     if (name === 'library') Library.show(location.hash);
+    if (name === 'studies') Studies.show(location.hash);
+    else if (window.Studies) Studies.hide();
     if (name === 'add') { loadReaders(); if (!state.catalog) window.refreshLibraryLinks(); }
   }
   function route() {
     if (!entered) return;
     var hash = location.hash || '#/library', base = hash.split('?')[0];
-    var name = /^#\/(library|notebook|item)(\/|$)/.test(base) ? 'library' : base.slice(2);
+    var name = /^#\/(library|notebook|item|passage)(\/|$)/.test(base) ? 'library' : /^#\/studies(\/|$)/.test(base) ? 'studies' : base.slice(2);
     if (['library', 'studies', 'add', 'help'].indexOf(name) < 0) { history.replaceState(null, '', '#/library'); name = 'library'; }
     showTab(name);
     // A fresh history entry is a child screen; a direct link still has a safe Back destination.
@@ -87,14 +92,6 @@
     var link = e.target.closest('a[href^="#/"]');
     if (link) history.replaceState(Object.assign({}, history.state, { scroll: window.scrollY }), '', location.href);
   });
-  if ($('installSteps')) {
-    var ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
-    var android = /Android/.test(navigator.userAgent);
-    $('installSteps').innerHTML = ios
-      ? '<li>Open this library in <b>Safari</b> on your iPhone or iPad.</li><li>Tap <b>Share</b> (the square with an upward arrow).</li><li>Choose <b>Add to Home Screen</b>, then <b>Add</b>.</li>'
-      : android ? '<li>Open this library in <b>Chrome</b> on your Android phone.</li><li>Tap the <b>three-dot menu</b> at the top.</li><li>Choose <b>Add to Home screen</b> or <b>Install app</b>, then confirm.</li>'
-      : '<li>On iPhone or iPad, open the library in <b>Safari</b>. Tap <b>Share</b>, then <b>Add to Home Screen</b>.</li><li>On Android, open it in <b>Chrome</b>. Tap the <b>three-dot menu</b>, then <b>Add to Home screen</b>.</li><li>On a computer, bookmark this page to come back anytime.</li>';
-  }
 
   // ---------- gate ----------
   function enterApp() {
@@ -103,9 +100,11 @@
     $('gate').classList.add('hidden');
     $('tabs').classList.remove('hidden');
     Library.start(state.code);
+    Studies.start(state.code);
     var last = store.get('tab'), initial = wasShared ? '#/add' : location.hash || '#/' + (['library', 'studies', 'add', 'help'].indexOf(last) >= 0 ? last : 'library');
     history.replaceState({ inApp: false, scroll: 0 }, '', location.pathname + initial);
     route();
+    if (window.InstallHelp) InstallHelp.appEntered();
     window.refreshLibraryLinks();
   }
   function tryCode(code) {

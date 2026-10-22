@@ -17,6 +17,14 @@
     <h1>NCCOG Library</h1>
   </header>
   <div id="offlineBanner" class="offline-banner hidden" role="status">Offline: showing saved library.</div>
+  <aside id="installBanner" class="install-banner hidden" aria-labelledby="installBannerTitle">
+    <div>
+      <strong id="installBannerTitle">Put NCCOG Library on your home screen</strong>
+      <span id="installBannerCopy">Open Help for the steps.</span>
+    </div>
+    <a class="install-banner-link" href="#/help">Show me how</a>
+    <button type="button" id="installBannerDismiss" aria-label="Dismiss home screen reminder">Not now</button>
+  </aside>
   <main>
     <div id="libraryNotice" class="hidden" role="status" aria-live="polite"></div>
     <section id="gate" class="card gate-card hidden">
@@ -34,23 +42,8 @@
       <div id="libraryView"></div>
     </section>
 
-    <section id="tab-studies" class="hidden" aria-labelledby="studies-heading">
-      <div class="card empty-state">
-        <p class="eyebrow">Studies</p>
-        <h2 id="studies-heading">Your studies will live here</h2>
-        <p>A study will be a notebook made from the books and sermons you choose. You will be able to come back, open it in Gemini, and keep building on it.</p>
-        <p class="status-line"><strong>Coming next.</strong> For now, you can ask a question across more than one library notebook in Gemini.</p>
-      </div>
-      <div class="card howto-card">
-        <h2>Ask across notebooks in Gemini</h2>
-        <ol class="steps">
-          <li>Open <a href="https://gemini.google.com" target="_blank" rel="noopener">gemini.google.com</a>.</li>
-          <li>Tap <strong>+</strong>, then <strong>More uploads</strong>.</li>
-          <li>Choose <strong>Notebooks</strong>.</li>
-          <li>Tick two or more notebooks, then tap <strong>Add</strong>.</li>
-          <li>Ask your question. Gemini can compare what the notebooks say.</li>
-        </ol>
-      </div>
+    <section id="tab-studies" class="hidden" aria-label="Studies">
+      <div id="studiesView"></div>
     </section>
 
     <!-- Add: existing 3-step workflow. IDs and wording stay intact. -->
@@ -129,10 +122,8 @@
       </div>
       <div class="card howto-card">
         <h2>Put it on your phone's home screen</h2>
-        <ol id="installSteps" class="steps">
-            <li><b>iPhone:</b> in Safari tap Share → <b>Add to Home Screen</b>.</li>
-            <li><b>Android:</b> in Chrome tap ⋮ → <b>Add to Home screen</b>.</li>
-        </ol>
+        <p id="installIntro">Choose the steps for the phone you are using.</p>
+        <ol id="installSteps" class="install-steps" aria-live="polite"></ol>
       </div>
       <div class="card contact-card">
         <h2>Ask Matt</h2>
@@ -142,13 +133,22 @@
     </section>
   </main>
 
+  <div id="studyToast" class="study-toast hidden" role="status" aria-live="polite"></div>
+  <aside id="shelfBar" class="shelf-bar hidden" aria-label="Current study shelf">
+    <button type="button" id="shelfLabel" class="shelf-label">Study shelf · 0 items</button>
+    <a class="shelf-review" href="#/studies/review">Review</a>
+  </aside>
+
   <nav id="tabs" class="tabbar hidden" aria-label="Main navigation">
     <button data-tab="library" class="on" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5v-16Z M4 19h16M7 7h9M7 11h9"/></svg><span>Library</span></button>
     <button data-tab="studies" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.4l6.1-.9L12 3Z"/></svg><span>Studies</span></button>
     <button data-tab="add" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add</span></button>
     <button data-tab="help" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.1 9a3 3 0 1 1 5.6 1.5c-1.1 1.5-2.7 2-2.7 4.1M12 18h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg><span>Help</span></button>
   </nav>
+  <script src="passages.js"></script>
   <script src="library.js"></script>
+  <script src="studies.js"></script>
   <script src="app.js"></script>
+  <script src="install.js"></script>
 </body>
 </html>
